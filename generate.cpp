@@ -6,8 +6,8 @@
 #include	<sstream>
 #include	<vector>
 using	namespace	std;
-const	unsigned	context=64;
-wylm<context,640,6,256,1>	model;
+const	unsigned	context=128;
+wylm<context,768,6,256,1>	model;
 
 int	main(int	ac,	char	**av){
 	if(!model.load(av[1]))	return	0;

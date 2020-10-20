@@ -15,9 +15,9 @@
 using	namespace	std;
 const	unsigned	threads=48;
 const	unsigned	batch=32;
-const	unsigned	fullbatch=((1u<<20)/threads/batch)*(threads*batch);
-const	unsigned	context=64;
-wylm<context,640,6,256,batch>	model;
+const	unsigned	fullbatch=((1u<<24)/threads/batch)*(threads*batch);
+const	unsigned	context=128;
+wylm<context,768,6,256,batch>	model;
 
 int	fd;
 struct	stat	sb;
@@ -54,18 +54,20 @@ double	sgd(void){
 void	document(void){
 	cerr<<"usage:	training [options] text\n";
 	cerr<<"\t-o:	output model=model\n";
-	cerr<<"\t-d:	dropout=0.0625\n";
-	cerr<<"\t-e:	learning rate=48\n";
+	cerr<<"\t-d:	hdropout=1/16\n";
+	cerr<<"\t-D:	idropout=1/16\n";
+	cerr<<"\t-e:	learning rate=16\n";
 	exit(0);
 }
 
 int	main(int	ac,	char	**av){
-	eta=48;	string	out="model";	model.dropout=1.0/16;
+	eta=16;	string	out="model";	model.idrop=model.hdrop=1.0/16;
 	int	opt;
-	while((opt=getopt(ac,	av,	"o:d:e:"))>=0){
+	while((opt=getopt(ac,	av,	"o:d:D:e:"))>=0){
 		switch(opt){
 		case	'o':	out=optarg;	break;
-		case	'd':	model.dropout=atof(optarg);	break;
+		case	'd':	model.hdrop=atof(optarg);	break;
+		case	'D':	model.idrop=atof(optarg);	break;
 		case	'e':	eta=atof(optarg);	break;
 		default:	document();
 		}
