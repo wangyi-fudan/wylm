@@ -3,7 +3,7 @@
 #include	<sys/time.h>
 #include	<algorithm>
 #include	<unistd.h>
-#include	"wylm.hpp"
+#include	"wylm1.hpp"
 #include	<unistd.h>
 #include	<iostream>
 #include	<fstream>
@@ -13,11 +13,12 @@
 #include	<vector>
 #include	<omp.h>
 using	namespace	std;
-const	unsigned	threads=48;
-const	unsigned	batch=32;
-const	unsigned	fullbatch=((1u<<24)/threads/batch)*(threads*batch);
-const	unsigned	context=128;
-wylm<context,768,6,256,batch>	model;
+const	uint64_t	threads=48;
+const	uint64_t	batch=32;
+const	uint64_t	fullbatch=((1u<<24)/threads/batch)*(threads*batch);
+const	uint64_t	context=64;
+const	uint64_t	hidden=256;
+wylm<context,hidden,8,256,batch>	model;
 
 int	fd;
 struct	stat	sb;
@@ -61,7 +62,7 @@ void	document(void){
 }
 
 int	main(int	ac,	char	**av){
-	eta=16;	string	out="model";	model.idrop=model.hdrop=1.0/16;
+	eta=16;	string	out="model";	model.idrop=1.0/16;	model.hdrop=1.0/16;
 	int	opt;
 	while((opt=getopt(ac,	av,	"o:d:D:e:"))>=0){
 		switch(opt){
@@ -78,7 +79,7 @@ int	main(int	ac,	char	**av){
 	
 	if(!open_mmap(av[optind]))	return	0;
 	cerr.precision(4);	cerr.setf(ios::fixed);
-	double	l0=FLT_MAX;	unsigned	gr=0;
+	double	l0=FLT_MAX;	uint64_t	gr=0;
 	for(size_t	it=0;	gr<4;	it++){
 		timeval	beg,	end;
 		gettimeofday(&beg,NULL);
@@ -87,7 +88,7 @@ int	main(int	ac,	char	**av){
 		double	dt=(end.tv_sec-beg.tv_sec+1e-6*(end.tv_usec-beg.tv_usec));
 		model.save(out.c_str());
 		cerr<<it<<'\t'<<l<<'\t'<<dt<<"s\t"<<eta<<'\n';
-		if(l>l0){	gr++;	eta/=10;	}
+		if(l>l0){	gr++;	eta/=10;	}	else	eta*=0.99;
 		l0=l;
 	}
 	close_mmap();

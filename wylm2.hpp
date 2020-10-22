@@ -11,29 +11,28 @@ class	wylm{
 private:
 	float	activate(float	x) {	return  x/sqrtf(1+x*x);	}
 	float	gradient(float	x) {	x=1-x*x;	return	x*sqrtf(x);	}
-	unsigned	size(void){	return	2*output*hidden+input*hidden+hidden+(depth-1)*hidden*hidden+output*hidden;	}
-	bool	drop(uint64_t	key,	uint64_t	l,	uint64_t	b,	uint64_t	i,	float	p){	return	wy2u01(wyhash64(key,(l<<56)|(b<<28)|i))>p;	}
+	unsigned	size(void){	return	2*65536*hidden+input*hidden+hidden+(depth-1)*hidden*hidden+output*hidden;	}
+	bool	drop(uint64_t	key,	unsigned	l,	unsigned	b,	unsigned	i,	float	p){	return	wy2u01(wyhash64(key,(l<<28)|(b<<16)|i))>p;	}
 	unsigned	readp(const	uint8_t	*p,	uint64_t	k){	
 		uint64_t	h=wyhash(&p,sizeof(const uint8_t*),k,_wyp);
-		return	(h&255)?*p:(h>>56);
+		return	(h&255)?*(uint16_t*)p:(h>>48);
 	}
-	unsigned	read(const	uint8_t	*p){	return	*p;	}
+	unsigned	read(const	uint8_t	*p){	return	*(uint16_t*)p;	}
 public:
-	float	idrop,	hdrop,	weight[2*output*hidden+input*hidden+hidden+(depth-1)*hidden*hidden+output*hidden];
+	float	idrop, hdrop, weight[2*(1ull<<(2*8))*hidden+input*hidden+hidden+(depth-1)*hidden*hidden+output*hidden];
 	uint64_t	seed;
-	omp_lock_t	lock[2*output+input+1+(depth-1)*hidden+output];
+	omp_lock_t	lock[input+1+(depth-1)*hidden+output];
 
 	wylm(){
 		seed=wyhash64(time(NULL),0);	
-		unsigned	n=size();
-		float	v=sqrtf(0.5);
-		for(unsigned	i=0;	i<n;	i++)	weight[i]=(i<4*output*hidden+input*hidden+hidden?v:1)*wy2gau(wyrand(&seed));
+		unsigned	n=size();	float	v=sqrtf(0.5);
+		for(unsigned	i=0;	i<n;	i++)	weight[i]=(i<2*65536*hidden+input*hidden+hidden?v:1)*wy2gau(wyrand(&seed));
+		for(unsigned	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_init_lock(lock+i);
 		fprintf(stderr,	"model weights:\t%u\n",	n);
-		for(size_t	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_init_lock(lock+i);
 	}
 
 	~wylm(){	
-		for(size_t	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_destroy_lock(lock+i);
+		for(unsigned	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_destroy_lock(lock+i);
 	}
 
 	bool	save(const	char	*F){
@@ -67,27 +66,27 @@ public:
 	}
 
 	float	train(uint8_t	*x[batch],	uint64_t	key,	float	eta){
-		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(input),*w,*w0,*w1,*p,*q,*g,*h,*o;
+		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(input-2+1),*w,*w0,*w1,*p,*q,*g,*o;
 		#define	aoff(b,l)	(a+(l)*batch*hidden+(b)*hidden)
 		#define	doff(b,l)	(a+(depth+(l))*batch*hidden+(b)*hidden)
 		#define	ooff(b)	(a+2*depth*batch*hidden+(b)*output)
-		#define woff(i,l)	(2*output*hidden+input*hidden+hidden+((l)-1)*hidden*hidden+(i)*hidden)
-		float	grad[size()]={};
+		#define woff(i,l)	(2*65536*hidden+input*hidden+hidden+((l)-1)*hidden*hidden+(i)*hidden)
+		float	grad[size()-2*65536*hidden]={};
 		unsigned	b,	i,	j,	l;
 		for(b=0;	b<batch;	b++){
-			p=aoff(b,0);
-			for(i=0;	i<input-1;	i++)	if(drop(key,255,b,i,idrop)){
-				w=weight+2*output*hidden+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	w1=weight+(output+readp(x[b]+input-1,key^b))*hidden;
+			p=aoff(b,0);	
+			for(i=0;	i<input-2;	i++)	if(drop(key,255,b,i,idrop)){
+				w=weight+2*65536*hidden+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	w1=weight+65536*hidden+readp(x[b]+input-2,key^b)*hidden;
 				for(j=0;	j<hidden;	j++)	p[j]+=w[j]*w0[j]*w1[j];
 			}
-			w=weight+2*output*hidden+input*hidden;
+			w=weight+2*65536*hidden+input*hidden;
 			for(i=0;	i<hidden;	i++){	p[i]=activate(wi*(p[i]+w[i]))*drop(key,0,b,i,hdrop);	}	p[0]=1;
 		}
 		for(l=1;	l<depth;	l++){
 			sgemm<1,0,hidden,batch,hidden,hidden,hidden,hidden,0>(wh,weight+woff(0,l),aoff(0,l-1),aoff(0,l));
-			for(unsigned    b=0;    b<batch;    b++){
+			for(b=0;    b<batch;    b++){
 				p=aoff(b,l);
-				for(unsigned	i=0;	i<hidden;	i++){	p[i]=activate(p[i])*drop(key,l,b,i,hdrop);	}	p[0]=1;
+				for(i=0;	i<hidden;	i++){	p[i]=activate(p[i])*drop(key,l,b,i,hdrop);	}	p[0]=1;
 			}
 		}
 		sgemm<1,0,output,batch,hidden,hidden,hidden,output,0>(wh,weight+woff(0,depth),aoff(0,depth-1),ooff(0));
@@ -101,47 +100,51 @@ public:
 			for(i=0;	i<output;	i++)	o[i]=(o[i]-(i==x[b][input]))*wh*eta;
 		}
 		sgemm<0,0,hidden,batch,output,hidden,output,hidden,0>(1,weight+woff(0,depth),ooff(0),doff(0,depth-1));
-		sgemm<0,1,hidden,output,batch,hidden,output,hidden,1>(1,aoff(0,depth-1),ooff(0),grad+woff(0,depth));
+		sgemm<0,1,hidden,output,batch,hidden,output,hidden,1>(1,aoff(0,depth-1),ooff(0),grad+woff(0,depth)-2*65536*hidden);
 		for(l=depth-1;	l;	l--) {
-			for(unsigned	b=0;	b<batch;	b++){
+			for(b=0;	b<batch;	b++){
 				p=aoff(b,l);	q=doff(b,l);
-				for(unsigned	i=0;	i<hidden;	i++)	q[i]*=gradient(p[i])*wh*drop(key,l,b,i,hdrop);
+				for(i=0;	i<hidden;	i++)	q[i]*=gradient(p[i])*wh*drop(key,l,b,i,hdrop);
 			}
 			sgemm<0,0,hidden,batch,hidden,hidden,hidden,hidden,0>(1,weight+woff(0,l),doff(0,l),doff(0,l-1));
-			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,aoff(0,l-1),doff(0,l),grad+woff(0,l));
+			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,aoff(0,l-1),doff(0,l),grad+woff(0,l)-2*65536*hidden);
 		}
 		for(b=0;	b<batch;	b++){
-			p=aoff(b,0);	g=doff(b,0);	w=grad+2*output*hidden+input*hidden;
+			p=aoff(b,0);	g=doff(b,0);	w=grad+input*hidden;
 			for(i=0;	i<hidden;	i++){	g[i]*=gradient(p[i])*wi*drop(key,0,b,i,hdrop);	w[i]+=g[i];	}
-			for(i=0;	i<input-1;	i++)	if(drop(key,255,b,i,idrop)){
-				unsigned	ra=readp(x[b]+i,key^b)*hidden,	rb=(output+readp(x[b]+input-1,key^b))*hidden;
-				w=weight+2*output*hidden+i*hidden;	w0=weight+ra;	w1=weight+rb;
-				p=grad+2*output*hidden+i*hidden;	q=grad+ra;	h=grad+rb;
-				for(j=0;	j<hidden;	j++){	p[j]+=g[j]*w0[j]*w1[j];	q[j]+=g[j]*w[j]*w1[j];	h[j]+=g[j]*w[j]*w0[j];	}
+			for(i=0;	i<input-2;	i++)	if(drop(key,255,b,i,idrop)){
+				w=weight+2*65536*hidden+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	w1=weight+65536*hidden+readp(x[b]+input-2,key^b)*hidden;
+				p=grad+i*hidden;
+				for(j=0;	j<hidden;	j++){	
+					p[j]+=g[j]*w0[j]*w1[j];
+					float	s=w0[j];
+					w0[j]-=g[j]*w[j]*w1[j];	
+					w1[j]-=g[j]*w[j]*s;	
+				}
 			}
 		}
-		const	size_t	n=size();
-		for(size_t	i=0;	i<n;	i+=hidden){
-			p=weight+i;	q=grad+i;
-			omp_set_lock(lock+i/hidden);
-			for(size_t	j=0;	j<hidden;	j++)	p[j]-=q[j];
-			omp_unset_lock(lock+i/hidden);
+		const	unsigned	n=size()-2*65536*hidden;
+		for(i=0;	i<n;	i+=hidden){
+			p=weight+i+2*65536*hidden;	q=grad+i;	l=i/hidden;
+			omp_set_lock(lock+l);
+			for(j=0;	j<hidden;	j++)	p[j]-=q[j];
+			omp_unset_lock(lock+l);
 		}
 		return	ret;
 	}
 	unsigned	sample(uint8_t	*x,	float	*o,	float	alpha){
-		float	a[depth*hidden]={},wh=1/sqrtf(hidden),wi=1/sqrtf(input),s,*w,*w0,*w1,*p,*q;
+		float	a[depth*hidden]={},wh=1/sqrtf(hidden),wi=1/sqrtf(input-2+1),s,*w,*w0,*w1,*p,*q;
 		unsigned	i,	j,	l;
-		for(i=0;	i<input-1;	i++){
-			w=weight+2*output*hidden+i*hidden;	w0=weight+read(x+i)*hidden;	w1=weight+output*hidden+read(x+input-1)*hidden;
+		for(i=0;	i<input-2;	i++){
+			w=weight+2*65536*hidden+i*hidden;	w0=weight+read(x+i)*hidden;	w1=weight+65536*hidden+read(x+input-2)*hidden;
 			for(j=0;	j<hidden;	j++)	a[j]+=w[j]*w0[j]*w1[j];
 		}
-		w=weight+2*output*hidden+input*hidden;
+		w=weight+2*65536*hidden+input*hidden;
 		for(i=0;	i<hidden;	i++){	a[i]=activate(wi*((1-idrop)*a[i]+w[i]))*(1-hdrop);	}	a[0]=1;
 		for(l=1;	l<depth;	l++){
 			p=a+(l-1)*hidden;	q=p+hidden;
 			for(i=0;	i<hidden;	i++){
-				s=0;	w=weight+2*output*hidden+input*hidden+hidden+(l-1)*hidden*hidden+i*hidden;
+				s=0;	w=weight+2*65536*hidden+input*hidden+hidden+(l-1)*hidden*hidden+i*hidden;
 				for(j=0;	j<hidden;	j++)	s+=p[j]*w[j];
 				q[i]=s;
 			}
@@ -150,7 +153,7 @@ public:
 		p=a+(depth-1)*hidden;
 		float	ma=-FLT_MAX,	sum=0;
 		for(i=0;	i<output;	i++){
-			s=0;	w=weight+2*output*hidden+input*hidden+hidden+(depth-1)*hidden*hidden+i*hidden;
+			s=0;	w=weight+2*65536*hidden+input*hidden+hidden+(depth-1)*hidden*hidden+i*hidden;
 			for(j=0;	j<hidden;	j++)	s+=w[j]*p[j];
 			o[i]=s*wh*alpha;	if(o[i]>ma)	ma=o[i];
 		}	
