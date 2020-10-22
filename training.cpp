@@ -17,8 +17,7 @@ const	uint64_t	threads=48;
 const	uint64_t	batch=32;
 const	uint64_t	fullbatch=((1u<<24)/threads/batch)*(threads*batch);
 const	uint64_t	context=64;
-const	uint64_t	hidden=256;
-wylm<context,hidden,8,256,batch>	model;
+wylm<context,128,8,256,batch>	model;
 
 int	fd;
 struct	stat	sb;
