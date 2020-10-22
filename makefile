@@ -1,8 +1,6 @@
 all:	training generate
-training:	training.cpp wylm.hpp
-	g++ training.cpp -o training -Ofast -Wall -march=native -fopenmp
-generate:	generate.cpp wylm.hpp
-	g++ generate.cpp -o generate -Ofast -Wall -march=native -fopenmp
-evaluate:	evaluate.cpp wylm.hpp
-	g++ evaluate.cpp -o evaluate -Ofast -Wall -march=native -fopenmp
+training:	training.cpp wylm1.hpp makefile
+	g++-9 training.cpp -o training -Ofast -Wall -march=native -fopenmp -fopt-info-vec
+generate:	generate.cpp wylm1.hpp makefile
+	g++-9 generate.cpp -o generate -Ofast -Wall -march=native -fopenmp
 
