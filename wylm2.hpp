@@ -11,7 +11,7 @@ class	wylm{
 private:
 	#define	wylm_size	(2*65536*hidden+input*hidden+(depth-1)*hidden*hidden+output*hidden)
 	#define	wylm_embed	(2*65536*hidden)
-	#define	wylm_stride	(hidden<<2)
+	#define	wylm_stride	(hidden<<3)
 	#define	aoff(b,l)	(a+(l)*batch*hidden+(b)*hidden)
 	#define	doff(b,l)	(a+(depth+(l))*batch*hidden+(b)*hidden)
 	#define	ooff(b)	(a+2*depth*batch*hidden+(b)*output)
@@ -31,8 +31,8 @@ public:
 
 	wylm(){
 		seed=wyhash64(time(NULL),0);	
-		float	v=sqrtf(0.5);
-		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=(i<2*65536*hidden+input*hidden+hidden?v:1)*wy2gau(wyrand(&seed));
+		float	v=cbrtf(0.5);
+		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=(i<2*65536*hidden+input*hidden+hidden?v:1)*wy2gau(wyrand(&seed));//1.704192254f
 		for(unsigned	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_init_lock(lock+i);
 		fprintf(stderr,	"model weights:\t%u\n",	wylm_size);
 	}
@@ -78,10 +78,11 @@ public:
 		for(b=0;	b<batch;	b++){
 			p=aoff(b,0);	
 			for(i=0;	i<input-1;	i++)	if(drop(key,255,b,i,idrop)){
-				w=weight+wylm_embed+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	w1=weight+65536*hidden+readp(x[b]+input-2,key^b)*hidden;
-				for(j=0;	j<hidden;	j++)	p[j]+=w[j]*w0[j]*w1[j];
+				w=weight+wylm_embed+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	
+				for(j=0;	j<hidden;	j++)	p[j]+=w[j]*w0[j];
 			}
-			for(i=0;	i<hidden;	i++)	p[i]=activate(wi*p[i])*drop(key,0,b,i,hdrop);	
+			w1=weight+65536*hidden+readp(x[b]+input-2,key^b)*hidden;
+			for(i=0;	i<hidden;	i++)	p[i]=activate(wi*p[i]*w1[i])*drop(key,0,b,i,hdrop);	
 			p[0]=drop(key,0,b,0,hdrop);
 		}
 		for(l=1;	l<depth;	l++){
@@ -114,19 +115,21 @@ public:
 			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,aoff(0,l-1),doff(0,l),grad+woff(0,l)-wylm_embed);
 		}
 		for(b=0;	b<batch;	b++){
-			p=aoff(b,0);	g=doff(b,0);
-			for(i=0;	i<hidden;	i++)	g[i]*=gradient(p[i])*wi*drop(key,0,b,i,hdrop);
-			g[0]=0;
+			o=aoff(b,0);	g=doff(b,0);
+			w1=weight+65536*hidden+readp(x[b]+input-2,key^b)*hidden;
+			for(i=0;	i<hidden;	i++){	g[i]*=gradient(o[i])*wi*drop(key,0,b,i,hdrop);	o[i]=g[i]*w1[i];	}
+			g[0]=o[0]=0;	float	temp[hidden]={};
 			for(i=0;	i<input-1;	i++)	if(drop(key,255,b,i,idrop)){
-				w=weight+wylm_embed+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	w1=weight+65536*hidden+readp(x[b]+input-2,key^b)*hidden;
+				w=weight+wylm_embed+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	
 				p=grad+i*hidden;
-				for(j=0;	j<hidden;	j++){	
-					p[j]+=g[j]*w0[j]*w1[j];
-					float	s=w0[j];
-					w0[j]-=g[j]*w[j]*w1[j];	
-					w1[j]-=g[j]*w[j]*s;	
+				#pragma GCC ivdep
+				for(j=0;	j<hidden;	j++){
+					temp[j]-=w[j]*w0[j];
+					p[j]+=o[j]*w0[j];
+					w0[j]-=o[j]*w[j];
 				}
-			}
+			}	
+			for(j=0;	j<hidden;	j++)	w1[j]+=g[i]*temp[j];
 		}
 		const	unsigned	n=wylm_size-wylm_embed;
 		for(i=0;	i<n;	i+=wylm_stride){
