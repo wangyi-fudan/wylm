@@ -93,14 +93,14 @@ public:
 	}
 
 	float	train(uint8_t	*x[batch],	uint64_t	key,	float	eta){
-		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(3*input-3),*w,*w0,*p,*q,*g,*o;
+		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(2*input-3),*w,*w0,*p,*q,*g,*o;
 		float	grad[wylm_size-wylm_embed]={};
 		unsigned	b,	i,	j,	l,	k;
 		for(b=0;	b<batch;	b++){
 			p=aoff(b,0);
-			for(i=0;	i<input;	i++)	for(k=0;	k<3;	k++)	if(i+k<input&&drop(key,255,b,i*3+k,idrop)){
+			for(i=0;	i<input;	i++)	for(k=1;	k<3;	k++)	if(i+k<input&&drop(key,255,b,i*3+k,idrop)){
 				unsigned	v=read(x[b]+i,k+1);	if(v==voca.size())	continue;
-				w=weight+wylm_embed+i*hidden;	w0=weight+v*hidden;	
+				w=weight+wylm_embed+(i+k)*hidden;	w0=weight+v*hidden;	
 				for(j=0;	j<hidden;	j++)	p[j]+=w[j]*w0[j];
 			}
 			for(i=0;	i<hidden;	i++)	p[i]=activate(wi*p[i])*drop(key,0,b,i,hdrop);	
@@ -139,10 +139,10 @@ public:
 			o=aoff(b,0);	g=doff(b,0);
 			for(i=0;	i<hidden;	i++)	g[i]*=gradient(o[i])*wi*drop(key,0,b,i,hdrop);
 			g[0]=0;
-			for(i=0;	i<input;	i++)	for(k=0;	k<3;	k++)	if(i+k<input&&drop(key,255,b,i*3+k,idrop)){
+			for(i=0;	i<input;	i++)	for(k=1;	k<3;	k++)	if(i+k<input&&drop(key,255,b,i*3+k,idrop)){
 				unsigned	v=read(x[b]+i,k+1);	if(v==voca.size())	continue;
-				w=weight+wylm_embed+i*hidden;	w0=weight+v*hidden;	
-				p=grad+i*hidden;
+				w=weight+wylm_embed+(i+k)*hidden;	w0=weight+v*hidden;	
+				p=grad+(i+k)*hidden;
 				#pragma GCC ivdep
 				for(j=0;	j<hidden;	j++){	p[j]+=g[j]*w0[j];	w0[j]-=g[j]*w[j];	}
 			}	
@@ -157,12 +157,12 @@ public:
 		return	ret;
 	}
 	unsigned	sample(uint8_t	*x,	float	*o,	float	alpha){
-		float	a[depth*hidden]={},wh=1/sqrtf(hidden),wi=1/sqrtf(3*input-3),s,*w,*w0,*p,*q;
+		float	a[depth*hidden]={},wh=1/sqrtf(hidden),wi=1/sqrtf(2*input-3),s,*w,*w0,*p,*q;
 		unsigned	i,	j,	l,	k;
 		for(i=0;	i<input;	i++){
-			for(k=0;	k<3;	k++)	if(i+k<input){
+			for(k=1;	k<3;	k++)	if(i+k<input){
 				unsigned	v=read(x+i,k+1);	if(v==voca.size())	continue;
-				w=weight+wylm_embed+i*hidden;	w0=weight+v*hidden;
+				w=weight+wylm_embed+(i+k)*hidden;	w0=weight+v*hidden;
 				for(j=0;	j<hidden;	j++)	a[j]+=w[j]*w0[j];
 			}
 		}
