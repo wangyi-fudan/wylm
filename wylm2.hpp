@@ -9,13 +9,13 @@
 template<unsigned	input,	unsigned	hidden,	unsigned	depth,	unsigned	output,	unsigned	batch>
 class	wylm{
 private:
-	#define	wylm_size	(2*65536*hidden+input*hidden+(depth-1)*hidden*hidden+output*hidden)
-	#define	wylm_embed	(2*65536*hidden)
+	#define	wylm_size	(65536*hidden+input*hidden+(depth-1)*hidden*hidden+output*hidden)
+	#define	wylm_embed	(65536*hidden)
 	#define	wylm_stride	(hidden<<3)
 	#define	aoff(b,l)	(a+(l)*batch*hidden+(b)*hidden)
 	#define	doff(b,l)	(a+(depth+(l))*batch*hidden+(b)*hidden)
 	#define	ooff(b)	(a+2*depth*batch*hidden+(b)*output)
-	#define woff(i,l)	(2*65536*hidden+input*hidden+((l)-1)*hidden*hidden+(i)*hidden)
+	#define woff(i,l)	(65536*hidden+input*hidden+((l)-1)*hidden*hidden+(i)*hidden)
 	float	activate(float	x) {	return  x/sqrtf(1+x*x);	}
 	float	gradient(float	x) {	x=1-x*x;	return	x*sqrtf(x);	}
 	bool	drop(uint64_t	key,	unsigned	l,	unsigned	b,	unsigned	i,	float	p){	return	wy2u01(wyhash64(key^l,(b<<16)|i))>p;	}
@@ -31,8 +31,8 @@ public:
 
 	wylm(){
 		seed=wyhash64(time(NULL),0);	
-		float	v=cbrtf(0.5);
-		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=(i<2*65536*hidden+input*hidden+hidden?v:1)*wy2gau(wyrand(&seed));//1.704192254f
+		float	v=0.5;
+		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=(i<65536*hidden+input*hidden+hidden?v:1)*wy2gau(wyrand(&seed));
 		for(unsigned	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_init_lock(lock+i);
 		fprintf(stderr,	"model weights:\t%u\n",	wylm_size);
 	}
@@ -72,8 +72,8 @@ public:
 	}
 
 	float	train(uint8_t	*x[batch],	uint64_t	key,	float	eta){
-		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(input-1),*w,*w0,*w1,*p,*q,*g,*o;
-		float	grad[wylm_size-2*65536*hidden]={};
+		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(input-1),*w,*w0,*p,*q,*g,*o;
+		float	grad[wylm_size-wylm_embed]={};
 		unsigned	b,	i,	j,	l;
 		for(b=0;	b<batch;	b++){
 			p=aoff(b,0);	
@@ -81,8 +81,7 @@ public:
 				w=weight+wylm_embed+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	
 				for(j=0;	j<hidden;	j++)	p[j]+=w[j]*w0[j];
 			}
-			w1=weight+65536*hidden+readp(x[b]+input-2,key^b)*hidden;
-			for(i=0;	i<hidden;	i++)	p[i]=activate(wi*p[i]*w1[i])*drop(key,0,b,i,hdrop);	
+			for(i=0;	i<hidden;	i++)	p[i]=activate(wi*p[i])*drop(key,0,b,i,hdrop);	
 			p[0]=drop(key,0,b,0,hdrop);
 		}
 		for(l=1;	l<depth;	l++){
@@ -116,20 +115,14 @@ public:
 		}
 		for(b=0;	b<batch;	b++){
 			o=aoff(b,0);	g=doff(b,0);
-			w1=weight+65536*hidden+readp(x[b]+input-2,key^b)*hidden;
-			for(i=0;	i<hidden;	i++){	g[i]*=gradient(o[i])*wi*drop(key,0,b,i,hdrop);	o[i]=g[i]*w1[i];	}
-			g[0]=o[0]=0;	float	temp[hidden]={};
+			for(i=0;	i<hidden;	i++)	g[i]*=gradient(o[i])*wi*drop(key,0,b,i,hdrop);
+			g[0]=0;
 			for(i=0;	i<input-1;	i++)	if(drop(key,255,b,i,idrop)){
 				w=weight+wylm_embed+i*hidden;	w0=weight+readp(x[b]+i,key^b)*hidden;	
 				p=grad+i*hidden;
 				#pragma GCC ivdep
-				for(j=0;	j<hidden;	j++){
-					temp[j]-=w[j]*w0[j];
-					p[j]+=o[j]*w0[j];
-					w0[j]-=o[j]*w[j];
-				}
+				for(j=0;	j<hidden;	j++){	p[j]+=g[j]*w0[j];	w0[j]-=g[j]*w[j];	}
 			}	
-			for(j=0;	j<hidden;	j++)	w1[j]+=g[i]*temp[j];
 		}
 		const	unsigned	n=wylm_size-wylm_embed;
 		for(i=0;	i<n;	i+=wylm_stride){
@@ -141,11 +134,11 @@ public:
 		return	ret;
 	}
 	unsigned	sample(uint8_t	*x,	float	*o,	float	alpha){
-		float	a[depth*hidden]={},wh=1/sqrtf(hidden),wi=1/sqrtf(input-1),s,*w,*w0,*w1,*p,*q;
+		float	a[depth*hidden]={},wh=1/sqrtf(hidden),wi=1/sqrtf(input-1),s,*w,*w0,*p,*q;
 		unsigned	i,	j,	l;
 		for(i=0;	i<input-1;	i++){
-			w=weight+wylm_embed+i*hidden;	w0=weight+read(x+i)*hidden;	w1=weight+65536*hidden+read(x+input-2)*hidden;
-			for(j=0;	j<hidden;	j++)	a[j]+=w[j]*w0[j]*w1[j];
+			w=weight+wylm_embed+i*hidden;	w0=weight+read(x+i)*hidden;
+			for(j=0;	j<hidden;	j++)	a[j]+=w[j]*w0[j];
 		}
 		for(i=0;	i<hidden;	i++){	a[i]=activate(wi*(1-idrop)*a[i])*(1-hdrop);	}	a[0]=1-hdrop;
 		for(l=1;	l<depth;	l++){
