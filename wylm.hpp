@@ -7,16 +7,16 @@
 #include	<time.h>
 #include	<omp.h>
 #include	<vector>
-template<unsigned	input,	unsigned	hidden,	unsigned	depth,	unsigned	output,	unsigned	batch,	unsigned	vocas=65536>
+template<unsigned	input,	unsigned	hidden,	unsigned	depth,	unsigned	output,	unsigned	batch>
 class	wylm{
 private:
-	#define	wylm_size	(vocas*hidden+input*hidden+(depth-1)*hidden*hidden+output*hidden)
-	#define	wylm_embed	(vocas*hidden)
+	#define	wylm_size	(input*hidden+(depth-1)*hidden*hidden+output*hidden)
+	#define	wylm_embed	(voca.size()*hidden)
 	#define	wylm_stride	(hidden<<3)
 	#define	aoff(b,l)	(a+(l)*batch*hidden+(b)*hidden)
 	#define	doff(b,l)	(a+(depth+(l))*batch*hidden+(b)*hidden)
 	#define	ooff(b)	(a+2*depth*batch*hidden+(b)*output)
-	#define woff(i,l)	(vocas*hidden+input*hidden+((l)-1)*hidden*hidden+(i)*hidden)
+	#define woff(i,l)	(input*hidden+((l)-1)*hidden*hidden+(i)*hidden)
 	std::vector<unsigned>	voca;
 	float	activate(float	x) {	return  x/sqrtf(1+x*x);	}
 	float	gradient(float	x) {	x=1-x*x;	return	x*sqrtf(x);	}
@@ -28,32 +28,37 @@ private:
 		return	vi!=voca.end()&&*vi==x?vi-voca.begin():voca.size();
 	}
 public:
-	float	idrop, hdrop, weight[wylm_size];
+	float	idrop, hdrop,	*weight;
 	uint64_t	seed;
-	omp_lock_t	lock[(wylm_size-wylm_embed)/wylm_stride];
+	omp_lock_t	lock[wylm_size/wylm_stride];
 
-	wylm(){
+	wylm(){	
 		seed=wyhash64(time(NULL),0);	
-		float	v=0.5;
-		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=(i<vocas*hidden+input*hidden+hidden?v:1)*wy2gau(wyrand(&seed));
+		weight=NULL;
 		for(unsigned	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_init_lock(lock+i);
-		fprintf(stderr,	"model weights:\t%u\n",	wylm_size);
 	}
 
 	~wylm(){	
+		free(weight);
 		for(unsigned	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_destroy_lock(lock+i);
 	}
 
-	bool	build_voca(const	uint8_t	*p,	uint64_t	size){
+	void	init_weight(void){
+		unsigned	n=wylm_size+wylm_embed;
+		weight=(float*)aligned_alloc(64,n*sizeof(float));
+		for(unsigned	i=0;	i<n;	i++)	weight[i]=(i<wylm_size?1:0.5f)*wy2gau(wyrand(&seed));
+		fprintf(stderr,	"model weights:\t%u\n",	n);
+	}
+
+	void	build_voca(const	uint8_t	*p,	uint64_t	size){
 		std::vector<bool>	mask(0x1000000);
 		for(uint64_t	i=0;	i<size;	i++){
-			mask[read_bytes(p+i,1)]=true;
+	//		mask[read_bytes(p+i,1)]=true;
 			if(i<size-1)	mask[read_bytes(p+i,2)]=true;
 			if(i<size-2)	mask[read_bytes(p+i,3)]=true;
 		}
 		for(size_t	i=0;	i<mask.size();	i++)	if(mask[i])	voca.push_back(i);
-		fprintf(stderr,"%u/%u\n",(unsigned)voca.size(),vocas);
-		return	voca.size()<vocas;
+		fprintf(stderr,"vocabulary:\t%u\n",(unsigned)voca.size());
 	}	
 	bool	save(const	char	*F){
 		FILE	*f=fopen(F,	"wb");
@@ -63,11 +68,10 @@ public:
 		n=hidden;	fwrite(&n,4,1,f);
 		n=depth;	fwrite(&n,4,1,f);
 		n=output;	fwrite(&n,4,1,f);
-		n=vocas;	fwrite(&n,4,1,f);
+		n=voca.size();	fwrite(&n,4,1,f);
 		fwrite(&idrop,4,1,f);
 		fwrite(&hdrop,4,1,f);
-		fwrite(weight,sizeof(weight),1,f);
-		n=voca.size();	fwrite(&n,4,1,f);
+		fwrite(weight,(wylm_size+wylm_embed)*sizeof(float),1,f);
 		fwrite(voca.data(),n*4,1,f);
 		fclose(f);
 		return	true;
@@ -81,12 +85,11 @@ public:
 		if(fread(&n,4,1,f)!=1||n!=hidden)	return	false;
 		if(fread(&n,4,1,f)!=1||n!=depth)	return	false;
 		if(fread(&n,4,1,f)!=1||n!=output)	return	false;
-		if(fread(&n,4,1,f)!=1||n!=vocas)	return	false;
+		if(fread(&n,4,1,f)!=1)	return	false;
+		voca.resize(n);	init_weight();
 		if(fread(&idrop,4,1,f)!=1)	return	false;
 		if(fread(&hdrop,4,1,f)!=1)	return	false;
-		if(fread(weight,sizeof(weight),1,f)!=1)	return	false;
-		if(fread(&n,4,1,f)!=1||n>=vocas)	return	false;
-		voca.resize(n);
+		if(fread(weight,(wylm_size+wylm_embed)*sizeof(float),1,f)!=1)	return	false;
 		if(fread(voca.data(),n*4,1,f)!=1)	return	false;
 		fclose(f);
 		return	true;
@@ -94,13 +97,13 @@ public:
 
 	float	train(uint8_t	*x[batch],	uint64_t	key,	float	eta){
 		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(2*input-3),*w,*w0,*p,*q,*g,*o;
-		float	grad[wylm_size-wylm_embed]={};
+		float	grad[wylm_size]={};
 		unsigned	b,	i,	j,	l,	k;
 		for(b=0;	b<batch;	b++){
 			p=aoff(b,0);
 			for(i=0;	i<input;	i++)	for(k=1;	k<3;	k++)	if(i+k<input&&drop(key,255,b,i*3+k,idrop)){
 				unsigned	v=read(x[b]+i,k+1);	if(v==voca.size())	continue;
-				w=weight+wylm_embed+(i+k)*hidden;	w0=weight+v*hidden;	
+				w=weight+(i+k)*hidden;	w0=weight+wylm_size+v*hidden;	
 				for(j=0;	j<hidden;	j++)	p[j]+=w[j]*w0[j];
 			}
 			for(i=0;	i<hidden;	i++)	p[i]=activate(wi*p[i])*drop(key,0,b,i,hdrop);	
@@ -125,7 +128,7 @@ public:
 			for(i=0;	i<output;	i++)	o[i]=(o[i]-(i==x[b][input]))*wh*eta;
 		}
 		sgemm<0,0,hidden,batch,output,hidden,output,hidden,0>(1,weight+woff(0,depth),ooff(0),doff(0,depth-1));
-		sgemm<0,1,hidden,output,batch,hidden,output,hidden,1>(1,aoff(0,depth-1),ooff(0),grad+woff(0,depth)-wylm_embed);
+		sgemm<0,1,hidden,output,batch,hidden,output,hidden,1>(1,aoff(0,depth-1),ooff(0),grad+woff(0,depth));
 		for(l=depth-1;	l;	l--) {
 			for(b=0;	b<batch;	b++){
 				p=aoff(b,l);	q=doff(b,l);
@@ -133,7 +136,7 @@ public:
 				q[0]=0;
 			}
 			sgemm<0,0,hidden,batch,hidden,hidden,hidden,hidden,0>(1,weight+woff(0,l),doff(0,l),doff(0,l-1));
-			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,aoff(0,l-1),doff(0,l),grad+woff(0,l)-wylm_embed);
+			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,aoff(0,l-1),doff(0,l),grad+woff(0,l));
 		}
 		for(b=0;	b<batch;	b++){
 			o=aoff(b,0);	g=doff(b,0);
@@ -141,15 +144,14 @@ public:
 			g[0]=0;
 			for(i=0;	i<input;	i++)	for(k=1;	k<3;	k++)	if(i+k<input&&drop(key,255,b,i*3+k,idrop)){
 				unsigned	v=read(x[b]+i,k+1);	if(v==voca.size())	continue;
-				w=weight+wylm_embed+(i+k)*hidden;	w0=weight+v*hidden;	
+				w=weight+(i+k)*hidden;	w0=weight+wylm_size+v*hidden;	
 				p=grad+(i+k)*hidden;
 				#pragma GCC ivdep
 				for(j=0;	j<hidden;	j++){	p[j]+=g[j]*w0[j];	w0[j]-=g[j]*w[j];	}
 			}	
 		}
-		const	unsigned	n=wylm_size-wylm_embed;
-		for(i=0;	i<n;	i+=wylm_stride){
-			p=weight+i+wylm_embed;	q=grad+i;
+		for(i=0;	i<wylm_size;	i+=wylm_stride){
+			p=weight+i;	q=grad+i;
 			omp_set_lock(lock+i/wylm_stride);
 			for(j=0;	j<wylm_stride;	j++)	p[j]-=q[j];
 			omp_unset_lock(lock+i/wylm_stride);
@@ -162,7 +164,7 @@ public:
 		for(i=0;	i<input;	i++){
 			for(k=1;	k<3;	k++)	if(i+k<input){
 				unsigned	v=read(x+i,k+1);	if(v==voca.size())	continue;
-				w=weight+wylm_embed+(i+k)*hidden;	w0=weight+v*hidden;
+				w=weight+(i+k)*hidden;	w0=weight+wylm_size+v*hidden;
 				for(j=0;	j<hidden;	j++)	a[j]+=w[j]*w0[j];
 			}
 		}
