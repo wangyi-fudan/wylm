@@ -64,7 +64,8 @@ public:
 		float	r[input*batch*(hidden+256)+2*batch*(hidden+256)]={},	*d0=r+input*batch*(hidden+256),	*d1=d0+batch*(hidden+256);
 		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(hidden+256),	grad[wylm_size]={};
 		for(unsigned	b=0;	b<batch;	b++){
-			float	*p=roff(b,0);
+			float	*p=roff(b,0);	uint64_t	rng=wyhash64(key,b);
+			for(unsigned	i=0;	i<hidden;	i++)	p[i]=2*wy2u01(wyrand(&rng))-1;
 			p[0]=p[hidden+x[b][0]]=1;
 		}		
 		for(unsigned	l=1;	l<input;	l++){
@@ -132,27 +133,22 @@ public:
 		}
 		return	ret;
 	}
-	unsigned	sample(uint8_t	*x,	float	*o,	float	alpha){
-		float	a[depth*hidden]={},d0[hidden+256]={},d1[hidden+256],wh=1/sqrtf(hidden),wi=1/sqrtf(hidden+256),s,*w,*p,*q;
+	void	push_back(float	*status,	uint8_t	c){
+		float	temp[hidden+256],	wi=1/sqrtf(hidden+256);
+		memcpy(temp,status,hidden*sizeof(float));
+		memset(temp+hidden,	0,	256*sizeof(float));
+		temp[hidden+c]=1;
+		for(unsigned	i=0;	i<hidden;	i++){
+			float	s=0,	*w=weight+i*(hidden+256);
+			for(unsigned	j=0;	j<hidden+256;	j++)	s+=w[j]*temp[j];
+			status[i]=activate(s*wi);
+		}
+		status[0]=1;
+	}
+	unsigned	sample(float	*status,	float	*o,	float	alpha){
+		float	a[depth*hidden]={},wh=1/sqrtf(hidden),s,*w,*p,*q;
 		unsigned	i,	j,	l;
-		d0[0]=d0[hidden+x[0]]=1;
-		for(l=1;	l<input;	l++){
-			for(i=0;	i<hidden;	i++){
-				s=0;	w=weight+i*(hidden+256);
-				for(unsigned	j=0;	j<hidden+256;	j++)	s+=w[j]*d0[j];
-				d1[i]=s;
-			}
-			for(i=0;	i<hidden;	i++)	d0[i]=activate(d1[i]*wi);
-			memset(d0+hidden,	0,	256*sizeof(float));
-			d0[0]=d0[hidden+x[l]]=1;
-		}
-		for(i=0;	i<hidden;	i++){
-			s=0;	w=weight+i*(hidden+256);
-			for(unsigned	j=0;	j<hidden+256;	j++)	s+=w[j]*d0[j];
-			d1[i]=s;
-		}
-		for(i=0;	i<hidden;	i++)	a[i]=activate(d1[i]*wi);
-		a[0]=1;
+		memcpy(a,status,hidden*sizeof(float));
 		for(l=1;	l<depth;	l++){
 			p=a+(l-1)*hidden;	q=p+hidden;
 			for(i=0;	i<hidden;	i++){
