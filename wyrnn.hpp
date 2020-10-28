@@ -62,7 +62,7 @@ public:
 
 	float	train(uint8_t	*x[batch],	uint64_t	key,	float	eta){
 		float	r[input*batch*(hidden+256)+2*batch*(hidden+256)]={},	*d0=r+input*batch*(hidden+256),	*d1=d0+batch*(hidden+256);
-		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(hidden+256),	grad[wylm_size]={};
+		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(hidden+1),	grad[wylm_size]={};
 		for(unsigned	b=0;	b<batch;	b++){
 			float	*p=roff(b,0);	uint64_t	rng=wyhash64(key,b);
 			for(unsigned	i=0;	i<hidden;	i++)	p[i]=2*wy2u01(wyrand(&rng))-1;
@@ -121,7 +121,7 @@ public:
 			for(unsigned	b=0;	b<batch;	b++){
 				float	*p=roff(b,l),	*q=d0+b*(hidden+256),	*o=d1+b*hidden;
 				for(unsigned	i=0;	i<hidden;	i++)	o[i]=q[i]*gradient(p[i])*wi;
-			}	
+			}
 			sgemm<0,0,hidden+256,batch,hidden,hidden+256,hidden,hidden+256,0>(1,weight,d1,d0);
 			sgemm<0,1,hidden+256,hidden,batch,hidden+256,hidden,hidden+256,1>(1,roff(0,l-1),d1,grad);
 		}
@@ -134,7 +134,7 @@ public:
 		return	ret;
 	}
 	void	push_back(float	*status,	uint8_t	c){
-		float	temp[hidden+256],	wi=1/sqrtf(hidden+256);
+		float	temp[hidden+256],	wi=1/sqrtf(hidden+1);
 		memcpy(temp,status,hidden*sizeof(float));
 		memset(temp+hidden,	0,	256*sizeof(float));
 		temp[hidden+c]=1;
