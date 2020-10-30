@@ -12,22 +12,21 @@ private:
 	#define	wylm_stride	(hidden<<3)
 	#define	roff(b,l)	(r+(l)*batch*hidden+(b)*hidden)
 	#define	aoff(b,l)	(a+(l)*batch*hidden+(b)*hidden)
-	#define	doff(b,l)	(a+(depth+(l))*batch*hidden+(b)*hidden)
-	#define	ooff(b)	(a+2*depth*batch*hidden+(b)*output)
-	#define	wylm_size	(output*hidden+hidden*hidden+hidden*hidden+output*hidden)
+	#define	ooff(b)	(a+depth*batch*hidden+(b)*output)
+	#define	wylm_size	(output*hidden+hidden*hidden+depth*hidden*hidden+output*hidden)
 	#define eoff(i,l)	(output*hidden+(i)*hidden)
-	#define woff(i,l)	(output*hidden+hidden*hidden+(l==depth)*hidden*hidden+(i)*hidden)
+	#define woff(i,l)	(output*hidden+hidden*hidden+(l)*hidden*hidden+(i)*hidden)
 	float	activate(float	x) {	return  x/sqrtf(1+x*x);	}
 	float	gradient(float	x) {	x=1-x*x;	return	x*sqrtf(x);	}
-	bool	drop(uint64_t	key,	uint64_t	l,	uint64_t	b,	uint64_t	i){	return	dropout==0||wy2u01(wyhash64(key^l,(b<<32)|i))>dropout;	}
+	bool	drop(uint64_t	key,	uint64_t	l,	uint64_t	b,	uint64_t	i){	return	1;}//dropout==0||wy2u01(wyhash64(key^l,(b<<32)|i))>dropout;	}
 public:
 	float	weight[wylm_size],	dropout;
 	uint64_t	seed;
 	omp_lock_t	lock[wylm_size/wylm_stride];
 
 	wylm(){
-		seed=wyhash64(time(NULL),0);
-		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=wy2gau(wyrand(&seed));
+		seed=wyhash64(time(NULL),0);	const	float	norm=sqrtf(2);
+		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=wy2gau(wyrand(&seed))*norm;
 		fprintf(stderr,	"model weights:\t%u\n",	wylm_size);
 		for(size_t	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_init_lock(lock+i);
 	}
@@ -66,19 +65,19 @@ public:
 
 	float	train(uint8_t	*x[batch],	uint64_t	key,	float	eta){
 		float	r[input*batch*hidden+2*batch*hidden]={},	*d0=r+input*batch*hidden,	*d1=d0+batch*hidden,	init[batch*hidden]={};
-		float	a[2*depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(hidden+1),	grad[wylm_size]={};
+		float	a[depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(hidden+1),	grad[wylm_size]={};
 		for(unsigned	b=0;	b<batch;	b++)	init[b*hidden]=1;
 		for(unsigned	l=0;	l<input;	l++){
-			sgemm<1,0,hidden,batch,hidden,hidden,hidden,hidden,0>(1,weight+eoff(0,l),l?roff(0,l-1):init,d0);
+			sgemm<1,0,hidden,batch,hidden,hidden,hidden,hidden,1>(1,weight+eoff(0,l),l?roff(0,l-1):init,roff(0,l));
 			for(unsigned	b=0;	b<batch;	b++){
-				float	*p=roff(b,l),	*q=d0+b*hidden,	*e=weight+x[b][l]*hidden;
+				float	*p=roff(b,l),	*e=weight+x[b][l]*hidden;
 				#pragma GCC ivdep
-				for(unsigned	i=0;	i<hidden;	i++)	p[i]=activate(wi*(q[i]+e[i]))*drop(key,l,b,i);
+				for(unsigned	i=0;	i<hidden;	i++)	p[i]=activate(wi*(p[i]+e[i]))*drop(key,l,b,i);
 				p[0]=drop(key,l,b,0);
 			}
 		}
 		for(unsigned	l=0;	l<depth;	l++){
-			sgemm<1,0,hidden,batch,hidden,hidden,hidden,hidden,0>(wh,weight+woff(0,l),l?aoff(0,l-1):roff(0,input-1),aoff(0,l));
+			sgemm<1,0,hidden,batch,hidden,hidden,hidden,hidden,1>(wh,weight+woff(0,l),l?aoff(0,l-1):roff(0,input-1),aoff(0,l));
 			for(unsigned    b=0;    b<batch;    b++){
 				float	*p=aoff(b,l);
 				#pragma GCC ivdep
@@ -86,7 +85,7 @@ public:
 				p[0]=drop(key,l+input,b,0);
 			}
 		}
-		sgemm<1,0,output,batch,hidden,hidden,hidden,output,0>(wh,weight+woff(0,depth),aoff(0,depth-1),ooff(0));
+		sgemm<1,0,output,batch,hidden,hidden,hidden,output,1>(wh,weight+woff(0,depth),aoff(0,depth-1),ooff(0));
 		float	ret=0;
 		for(unsigned	b=0;	b<batch;	b++){
 			float	ma=-FLT_MAX,	sum=0,	*o=ooff(b);
@@ -96,18 +95,19 @@ public:
 			ret+=-logf(fmaxf(o[x[b][input]],FLT_MIN));
 			for(unsigned	i=0;	i<output;	i++)	o[i]=(o[i]-(i==x[b][input]))*wh*eta;
 		}
-		sgemm<0,0,hidden,batch,output,hidden,output,hidden,0>(1,weight+woff(0,depth),ooff(0),doff(0,depth-1));
+		sgemm<0,0,hidden,batch,output,hidden,output,hidden,0>(1,weight+woff(0,depth),ooff(0),d0);
 		sgemm<0,1,hidden,output,batch,hidden,output,hidden,1>(1,aoff(0,depth-1),ooff(0),grad+woff(0,depth));
 		for(unsigned	l=depth-1;	l<depth;	l--) {
 			for(unsigned	b=0;	b<batch;	b++){
-				float	*p=aoff(b,l),	*q=doff(b,l);
+				float	*p=aoff(b,l),	*q=d0+b*hidden,	*o=d1+b*hidden;
 				#pragma GCC ivdep
-				for(unsigned	i=0;	i<hidden;	i++)	q[i]*=gradient(p[i])*wh*drop(key,l+input,b,i);
+				for(unsigned	i=0;	i<hidden;	i++)	o[i]=q[i]*gradient(p[i])*wh*drop(key,l+input,b,i);
 				q[0]=0;
 			}
-			sgemm<0,0,hidden,batch,hidden,hidden,hidden,hidden,0>(1,weight+woff(0,l),doff(0,l),l?doff(0,l-1):d0);
-			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,l?aoff(0,l-1):roff(0,input-1),doff(0,l),grad+woff(0,l));
+			sgemm<0,0,hidden,batch,hidden,hidden,hidden,hidden,0>(1,weight+woff(0,l),d1,d0);
+			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,l?aoff(0,l-1):roff(0,input-1),d1,grad+woff(0,l));
 		}
+
 		for(unsigned	l=input-1;	l<input;	l--){
 			for(unsigned	b=0;	b<batch;	b++){
 				float	*p=roff(b,l),	*q=d0+b*hidden,	*o=d1+b*hidden;
