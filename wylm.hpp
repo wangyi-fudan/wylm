@@ -22,17 +22,11 @@ private:
 public:
 	float	weight[wylm_size],	dropout;
 	uint64_t	seed;
-	omp_lock_t	lock[wylm_size/wylm_stride];
 
 	wylm(){
 		seed=wyhash64(time(NULL),0);	const	float	norm=sqrtf(2);
 		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=wy2gau(wyrand(&seed))*norm;
 		fprintf(stderr,	"model weights:\t%u\n",	wylm_size);
-		for(size_t	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_init_lock(lock+i);
-	}
-
-	~wylm(){	
-		for(size_t	i=0;	i<sizeof(lock)/sizeof(omp_lock_t);	i++)	omp_destroy_lock(lock+i);
 	}
 
 	bool	save(const	char	*F){
@@ -65,8 +59,12 @@ public:
 
 	float	train(uint8_t	*x[batch],	uint64_t	key,	float	eta){
 		float	r[input*batch*hidden+2*batch*hidden]={},	*d0=r+input*batch*hidden,	*d1=d0+batch*hidden,	init[batch*hidden]={};
-		float	a[depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(hidden+1),	grad[wylm_size]={};
-		for(unsigned	b=0;	b<batch;	b++)	init[b*hidden]=1;
+		float	a[depth*batch*hidden+batch*output]={},wh=1/sqrtf(hidden),wi=1/sqrtf(hidden+1),	grad[hidden*hidden]={};
+		for(unsigned	b=0;	b<batch;	b++){
+			float	*p=init+b*hidden;
+			for(unsigned	i=0;	i<hidden;	i++)	p[i]=(wy2u01(wyrand(&seed))*2-1)*(1-dropout);
+			p[0]=1-dropout;
+		}
 		for(unsigned	l=0;	l<input;	l++){
 			sgemm<1,0,hidden,batch,hidden,hidden,hidden,hidden,1>(1,weight+eoff(0,l),l?roff(0,l-1):init,roff(0,l));
 			for(unsigned	b=0;	b<batch;	b++){
@@ -94,7 +92,7 @@ public:
 			for(unsigned	i=0;	i<output;	i++)	o[i]=(o[i]-(i==x[b][input]))*wh*eta;
 		}
 		sgemm<0,0,hidden,batch,output,hidden,output,hidden,0>(1,weight+woff(0,depth),ooff(0),d0);
-		sgemm<0,1,hidden,output,batch,hidden,output,hidden,1>(1,aoff(0,depth-1),ooff(0),grad+woff(0,depth));
+		sgemm<0,1,hidden,output,batch,hidden,output,hidden,1>(-1,aoff(0,depth-1),ooff(0),weight+woff(0,depth));
 		for(unsigned	l=depth-1;	l<depth;	l--) {
 			for(unsigned	b=0;	b<batch;	b++){
 				float	*p=aoff(b,l),	*q=d0+b*hidden,	*o=d1+b*hidden;
@@ -102,7 +100,7 @@ public:
 				q[0]=0;
 			}
 			sgemm<0,0,hidden,batch,hidden,hidden,hidden,hidden,0>(1,weight+woff(0,l),d1,d0);
-			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,l?aoff(0,l-1):roff(0,input-1),d1,grad+woff(0,l));
+			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(-1,l?aoff(0,l-1):roff(0,input-1),d1,weight+woff(0,l));
 		}
 
 		for(unsigned	l=input-1;	l<input;	l--){
@@ -112,18 +110,14 @@ public:
 				o[0]=0;
 			}
 			sgemm<0,0,hidden,batch,hidden,hidden,hidden,hidden,0>(1,weight+eoff(0,l),d1,d0);
-			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(1,l?roff(0,l-1):init,d1,grad+eoff(0,l));
+			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(-1,l?roff(0,l-1):init,d1,grad);
 			for(unsigned	b=0;	b<batch;	b++){
-				float	*p=d1+b*hidden,	*e=grad+x[b][l]*hidden;
-				for(unsigned	i=0;	i<hidden;	i++)	e[i]+=p[i];
+				float	*p=d1+b*hidden,	*e=weight+x[b][l]*hidden;
+				for(unsigned	i=0;	i<hidden;	i++)	e[i]-=p[i];
 			}
 		}
-		for(unsigned	i=0;	i<wylm_size;	i+=wylm_stride){
-			float	*p=weight+i,	*q=grad+i;
-			omp_set_lock(lock+i/wylm_stride);
-			for(unsigned	j=0;	j<wylm_stride;	j++)	p[j]-=q[j];
-			omp_unset_lock(lock+i/wylm_stride);
-		}
+		float	*p=weight+output*hidden;
+		for(unsigned	i=0;	i<hidden*hidden;	i++)	p[i]+=grad[i];
 		return	ret;
 	}
 	void	push_back(float	*status,	uint8_t	x){

@@ -13,9 +13,8 @@
 #include	<vector>
 #include	<omp.h>
 using	namespace	std;
-const	uint64_t	threads=1;
 const	uint64_t	batch=32;
-const	uint64_t	fullbatch=((1u<<20)/threads/batch)*(threads*batch);
+const	uint64_t	fullbatch=1u<<20;
 const	uint64_t	context=32;
 const	uint64_t	hidden=64;
 wylm<context,hidden,6,256,batch>	model;
@@ -23,7 +22,7 @@ wylm<context,hidden,6,256,batch>	model;
 int	fd;
 struct	stat	sb;
 uint8_t	*data;
-uint64_t	data_size,	seed[threads];
+uint64_t	data_size;
 float	eta;
 
 int	open_mmap(const	char	*F){
@@ -41,13 +40,10 @@ void	close_mmap(void){
 
 double	sgd(void){
 	double	score=0;
-	#pragma omp parallel for
 	for(size_t	it=0;	it<fullbatch;	it+=batch){
-		uint8_t	*x[batch];	uint64_t	&s=seed[omp_get_thread_num()];
-		for(size_t	b=0;	b<batch;	b++)	x[b]=data+wyrand(&s)%(data_size-context-1);
-		float	l=model.train(x,wyrand(&s),eta/(eta+threads*batch));
-		#pragma omp atomic
-		score+=l;
+		uint8_t	*x[batch];
+		for(size_t	b=0;	b<batch;	b++)	x[b]=data+wyrand(&model.seed)%(data_size-context-1);
+		score+=model.train(x,wyrand(&model.seed),eta/(eta+batch));
 	}
 	return	score/fullbatch/log(2);
 }
@@ -57,7 +53,7 @@ void	document(void){
 	cerr<<"\t-i:	input model=NULL\n";
 	cerr<<"\t-o:	output model=model\n";
 	cerr<<"\t-d:	dropout=0\n";
-	cerr<<"\t-e:	learning rate=16\n";
+	cerr<<"\t-e:	learning rate=1\n";
 	exit(0);
 }
 
@@ -74,8 +70,6 @@ int	main(int	ac,	char	**av){
 		}
 	}
 	if(ac<optind+1)	return	0;
-	omp_set_num_threads(threads);
-	for(size_t	i=0;	i<threads;	i++)	seed[i]=wyhash64(time(NULL),i);
 	if(!open_mmap(av[optind]))	return	0;
 	if(in.size())	model.load(in.c_str());
 	cerr.precision(4);	cerr.setf(ios::fixed);
@@ -88,7 +82,7 @@ int	main(int	ac,	char	**av){
 		double	dt=(end.tv_sec-beg.tv_sec+1e-6*(end.tv_usec-beg.tv_usec));
 		model.save(out.c_str());
 		cerr<<it<<'\t'<<l<<'\t'<<dt<<"s\t"<<eta<<'\n';
-		if(l>l0){	gr++;	eta/=10;	}//	else	eta*=0.99;
+		if(l>l0){	gr++;	eta/=10;	}	else	eta*=0.99;
 		l0=l;
 	}
 	close_mmap();
