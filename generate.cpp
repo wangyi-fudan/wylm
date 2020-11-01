@@ -7,8 +7,8 @@
 #include	<vector>
 using	namespace	std;
 const	uint64_t	context=32;
-const	uint64_t	hidden=64;
-wylm<context,hidden,6,256,1>	model;
+const	uint64_t	hidden=128;
+wylm<context,hidden,5,256,1>	model;
 
 int	main(int	ac,	char	**av){
 	if(!model.load(av[1]))	return	0;

@@ -116,7 +116,7 @@ public:
 				for(unsigned	i=0;	i<hidden;	i++)	e[i]-=p[i];
 			}
 		}
-		float	*p=weight+output*hidden;
+		float	*p=weight+eoff(0,0);
 		for(unsigned	i=0;	i<hidden*hidden;	i++)	p[i]+=grad[i];
 		return	ret;
 	}

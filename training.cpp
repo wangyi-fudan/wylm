@@ -17,7 +17,7 @@ const	uint64_t	batch=32;
 const	uint64_t	fullbatch=1u<<20;
 const	uint64_t	context=32;
 const	uint64_t	hidden=64;
-wylm<context,hidden,6,256,batch>	model;
+wylm<context,hidden,5,256,batch>	model;
 
 int	fd;
 struct	stat	sb;
