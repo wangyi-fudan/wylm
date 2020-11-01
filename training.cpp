@@ -3,7 +3,7 @@
 #include	<sys/time.h>
 #include	<algorithm>
 #include	<unistd.h>
-#include	"wylm1.hpp"
+#include	"wylm.hpp"
 #include	<unistd.h>
 #include	<iostream>
 #include	<fstream>
@@ -13,11 +13,12 @@
 #include	<vector>
 #include	<omp.h>
 using	namespace	std;
-const	uint64_t	threads=48;
+const	uint64_t	threads=1;
 const	uint64_t	batch=32;
-const	uint64_t	fullbatch=((1u<<24)/threads/batch)*(threads*batch);
-const	uint64_t	context=64;
-wylm<context,128,8,256,batch>	model;
+const	uint64_t	fullbatch=((1u<<20)/threads/batch)*(threads*batch);
+const	uint64_t	context=32;
+const	uint64_t	hidden=64;
+wylm<context,hidden,6,256,batch>	model;
 
 int	fd;
 struct	stat	sb;
@@ -44,39 +45,39 @@ double	sgd(void){
 	for(size_t	it=0;	it<fullbatch;	it+=batch){
 		uint8_t	*x[batch];	uint64_t	&s=seed[omp_get_thread_num()];
 		for(size_t	b=0;	b<batch;	b++)	x[b]=data+wyrand(&s)%(data_size-context-1);
-		float	l=model.train(x,wyrand(&s),eta);
+		float	l=model.train(x,wyrand(&s),eta/(eta+threads*batch));
 		#pragma omp atomic
 		score+=l;
 	}
-	return	score/fullbatch;
+	return	score/fullbatch/log(2);
 }
 
 void	document(void){
 	cerr<<"usage:	training [options] text\n";
+	cerr<<"\t-i:	input model=NULL\n";
 	cerr<<"\t-o:	output model=model\n";
-	cerr<<"\t-d:	hdropout=1/16\n";
-	cerr<<"\t-D:	idropout=1/16\n";
+	cerr<<"\t-d:	dropout=0\n";
 	cerr<<"\t-e:	learning rate=16\n";
 	exit(0);
 }
 
 int	main(int	ac,	char	**av){
-	eta=16;	string	out="model";	model.idrop=1.0/16;	model.hdrop=1.0/16;
+	eta=1;	string	out="model",	in;	model.dropout=0;
 	int	opt;
-	while((opt=getopt(ac,	av,	"o:d:D:e:"))>=0){
+	while((opt=getopt(ac,	av,	"i:o:d:e:"))>=0){
 		switch(opt){
+		case	'i':	in=optarg;	break;
 		case	'o':	out=optarg;	break;
-		case	'd':	model.hdrop=atof(optarg);	break;
-		case	'D':	model.idrop=atof(optarg);	break;
+		case	'd':	model.dropout=atof(optarg);	break;
 		case	'e':	eta=atof(optarg);	break;
 		default:	document();
 		}
 	}
 	if(ac<optind+1)	return	0;
-	omp_set_num_threads(threads);	eta=eta/(eta+threads*batch);
+	omp_set_num_threads(threads);
 	for(size_t	i=0;	i<threads;	i++)	seed[i]=wyhash64(time(NULL),i);
-	
 	if(!open_mmap(av[optind]))	return	0;
+	if(in.size())	model.load(in.c_str());
 	cerr.precision(4);	cerr.setf(ios::fixed);
 	double	l0=FLT_MAX;	uint64_t	gr=0;
 	for(size_t	it=0;	gr<4;	it++){
@@ -87,7 +88,7 @@ int	main(int	ac,	char	**av){
 		double	dt=(end.tv_sec-beg.tv_sec+1e-6*(end.tv_usec-beg.tv_usec));
 		model.save(out.c_str());
 		cerr<<it<<'\t'<<l<<'\t'<<dt<<"s\t"<<eta<<'\n';
-		if(l>l0){	gr++;	eta/=10;	}	else	eta*=0.99;
+		if(l>l0){	gr++;	eta/=10;	}//	else	eta*=0.99;
 		l0=l;
 	}
 	close_mmap();
