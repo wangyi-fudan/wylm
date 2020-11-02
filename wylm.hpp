@@ -9,7 +9,6 @@
 template<unsigned	input,	unsigned	hidden,	unsigned	depth,	unsigned	output,	unsigned	batch>
 class	wylm{
 private:
-	#define	wylm_stride	(hidden<<3)
 	#define	roff(b,l)	(r+(l)*batch*hidden+(b)*hidden)
 	#define	aoff(b,l)	(a+(l)*batch*hidden+(b)*hidden)
 	#define	ooff(b)	(a+depth*batch*hidden+(b)*output)
@@ -24,7 +23,8 @@ public:
 	uint64_t	seed;
 
 	wylm(){
-		seed=wyhash64(time(NULL),0);	const	float	norm=sqrtf(2);
+		seed=wyhash64(time(NULL),0);	dropout=0;
+		const	float	norm=sqrtf(2);
 		for(unsigned	i=0;	i<wylm_size;	i++)	weight[i]=wy2gau(wyrand(&seed))*norm;
 		fprintf(stderr,	"model weights:\t%u\n",	wylm_size);
 	}
@@ -135,42 +135,6 @@ public:
 		float	a[2*hidden]={},*d=a+hidden,wh=1/sqrtf(hidden),s,*w;
 		unsigned	i,	j,	l;
 		memcpy(a,	status,	hidden*4);
-		for(l=0;	l<depth;	l++){
-			for(i=0;	i<hidden;	i++){
-				s=0;	w=weight+woff(i,l);
-				for(j=0;	j<hidden;	j++)	s+=a[j]*w[j];
-				d[i]=s;
-			}
-			for(i=0;	i<hidden;	i++)	a[i]=activate(wh*d[i])*(1-dropout);
-			a[0]=1-dropout;
-		}
-		float	ma=-FLT_MAX,	sum=0;
-		for(i=0;	i<output;	i++){
-			s=0;	w=weight+woff(i,depth);
-			for(j=0;	j<hidden;	j++)	s+=w[j]*a[j];
-			o[i]=s*wh*alpha;	if(o[i]>ma)	ma=o[i];
-		}	
-		for(i=0;	i<output;	i++)	sum+=(o[i]=expf(o[i]-ma));
-		for(i=0;	i<output;	i++)	o[i]/=sum;
-		float	ran=wy2u01(wyrand(&seed));	sum=0;
-		for(i=0;	i<output;	i++){	sum+=o[i];	if(sum>=ran)	return	i;	}
-		return	output-1;
-	}
-
-	unsigned	sample(uint8_t	*x,	float	*o,	float	alpha){
-		float	a[2*hidden]={},*d=a+hidden,wh=1/sqrtf(hidden),wi=1/sqrt(hidden+1),s,*w;
-		unsigned	i,	j,	l;
-		a[0]=1;
-		for(l=0;	l<input;	l++){
-			float	*e=weight+x[l]*hidden;
-			for(i=0;	i<hidden;	i++){
-				s=0;	w=weight+eoff(i,l);
-				for(j=0;	j<hidden;	j++)	s+=a[j]*w[j];
-				d[i]=s;
-			}
-			for(i=0;	i<hidden;	i++)	a[i]=activate(wi*(d[i]+e[i]))*(1-dropout);
-			a[0]=1-dropout;
-		}
 		for(l=0;	l<depth;	l++){
 			for(i=0;	i<hidden;	i++){
 				s=0;	w=weight+woff(i,l);
