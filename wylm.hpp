@@ -1,4 +1,8 @@
+#ifdef	SGEMM512
 #include	"sgemm512.hpp"
+#else
+#include	<openblas/cblas.h>
+#endif
 #include	<string.h>
 #include	"wyhash.h"
 #include	<float.h>
@@ -70,14 +74,22 @@ public:
 			p[0]=drop(key,0,b,0);
 		}
 		for(unsigned	l=1;	l<depth;	l++){
+#ifdef	SGEMM512
 			sgemm<1,0,hidden,batch,hidden,hidden,hidden,hidden,1>(wh,weight+woff(0,l),a+ioff(0,l-1),a+ioff(0,l));
+#else
+			cblas_sgemm(CblasColMajor,CblasTrans,CblasNoTrans,hidden,batch,hidden,wh,weight+woff(0,l),hidden,a+ioff(0,l-1),hidden,0,a+ioff(0,l),hidden);
+#endif
 			for(unsigned    b=0;    b<batch;    b++){
 				float	*p=a+ioff(b,l);
 				for(unsigned	i=0;	i<hidden;	i++)	p[i]=activate(p[i])*drop(key,l,b,i);
 				p[0]=drop(key,l,b,0);
 			}
 		}
+#ifdef	SGEMM512
 		sgemm<1,0,output,batch,hidden,hidden,hidden,output,1>(wh,weight+woff(0,depth),a+ioff(0,depth-1),a+ooff(0));
+#else
+		cblas_sgemm(CblasColMajor,CblasTrans,CblasNoTrans,output,batch,hidden,wh,weight+woff(0,depth),hidden,a+ioff(0,depth-1),hidden,0,a+ooff(0),hidden);
+#endif
 		float	ret=0;
 		for(unsigned	b=0;	b<batch;	b++){
 			float	ma=-FLT_MAX,	sum=0,	*o=a+ooff(b);
@@ -87,16 +99,26 @@ public:
 			ret+=-logf(fmaxf(o[x[b][input]],FLT_MIN));
 			for(unsigned	i=0;	i<output;	i++)	o[i]=(o[i]-(i==x[b][input]))*wh*eta;
 		}
+#ifdef	SGEMM512
 		sgemm<0,0,hidden,batch,output,hidden,output,hidden,0>(1,weight+woff(0,depth),a+ooff(0),d0);
 		sgemm<0,1,hidden,output,batch,hidden,output,hidden,1>(-1,a+ioff(0,depth-1),a+ooff(0),weight+woff(0,depth));
+#else
+		cblas_sgemm(CblasColMajor,CblasNoTrans,CblasNoTrans,hidden,batch,output,1,weight+woff(0,depth),hidden,a+ooff(0),hidden,0,d0,hidden);
+		cblas_sgemm(CblasColMajor,CblasNoTrans,CblasTrans,hidden,output,batch,-1,a+ioff(0,depth-1),hidden,a+ooff(0),hidden,1,weight+woff(0,depth),hidden);
+#endif
 		for(unsigned	l=depth-1;	l;	l--) {
 			for(unsigned	b=0;	b<batch;	b++){
 				float	*p=a+ioff(b,l),	*q=d0+b*hidden,	*o=d1+b*hidden;
 				for(unsigned	i=0;	i<hidden;	i++)	o[i]=q[i]*gradient(p[i])*wh*drop(key,l,b,i);
 				o[0]=0;
 			}
+#ifdef	SGEMM512
 			sgemm<0,0,hidden,batch,hidden,hidden,hidden,hidden,0>(1,weight+woff(0,l),d1,d0);
 			sgemm<0,1,hidden,hidden,batch,hidden,hidden,hidden,1>(-1,a+ioff(0,l-1),d1,weight+woff(0,l));
+#else
+			cblas_sgemm(CblasColMajor,CblasNoTrans,CblasNoTrans,hidden,batch,hidden,1,weight+woff(0,l),hidden,d1,hidden,0,d0,hidden);
+			cblas_sgemm(CblasColMajor,CblasNoTrans,CblasTrans,hidden,hidden,batch,-1,a+ioff(0,l-1),hidden,d1,hidden,1,weight+woff(0,l),hidden);
+#endif
 		}
 		for(unsigned	b=0;	b<batch;	b++){
 			float	*p=a+ioff(b,0),	*q=d0+b*hidden;
