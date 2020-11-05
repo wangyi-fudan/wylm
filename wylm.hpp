@@ -21,7 +21,7 @@ public:
 	uint64_t	seed;
 
 	wylm(){
-		seed=wyhash64(time(NULL),0);	dropout=0;	const	float	norm0=sqrtf(0.5f),	norm1=sqrtf(2);
+		seed=wyhash64(time(NULL),0);	dropout=0;	const	float	norm0=1,	norm1=sqrtf(2);
 		for(unsigned	i=0;	i<sizeof(weight)/sizeof(float);	i++)	weight[i]=(i<output*hidden+input*hidden?norm0:norm1)*wy2gau(wyrand(&seed));
 		fprintf(stderr,	"model weights:\t%u\n",	(unsigned)(sizeof(weight)/sizeof(float)));
 	}
